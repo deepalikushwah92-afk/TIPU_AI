@@ -5,7 +5,9 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.provider.ContactsContract
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.RecognitionListener
@@ -24,7 +26,6 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         tts = TextToSpeech(this, this)
 
         val layout = LinearLayout(this).apply {
@@ -66,7 +67,6 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         layout.addView(status)
         layout.addView(listen)
         layout.addView(stop)
-
         setContentView(layout)
     }
 
@@ -77,16 +77,14 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     }
 
     private fun startListening() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            status.text = "Speech Recognition उपलब्ध नहीं है।"
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 10)
             return
         }
 
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(
-                arrayOf(Manifest.permission.RECORD_AUDIO), 10
-            )
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            speak("Speech Recognition उपलब्ध नहीं है")
             return
         }
 
@@ -99,11 +97,9 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             }
 
             override fun onResults(results: Bundle?) {
-                val command = results
-                    ?.getStringArrayList(
-                        SpeechRecognizer.RESULTS_RECOGNITION
-                    )?.firstOrNull().orEmpty()
-
+                val command = results?.getStringArrayList(
+                    SpeechRecognizer.RESULTS_RECOGNITION
+                )?.firstOrNull().orEmpty()
                 handleCommand(command)
             }
 
@@ -119,78 +115,96 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             override fun onEvent(eventType: Int, params: Bundle?) {}
         })
 
-        val intent = Intent(
-            RecognizerIntent.ACTION_RECOGNIZE_SPEECH
-        ).apply {
-            putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-            )
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
         }
-
         speech?.startListening(intent)
     }
 
     private fun handleCommand(command: String) {
         val c = command.lowercase(Locale.ROOT)
 
-        val reply = when {
-            c.contains("whatsapp") || c.contains("व्हाट्सएप") -> {
-                openApp("com.whatsapp", "WhatsApp खोल रहा हूँ।")
+        when {
+            c.contains("कॉल") || c.contains("call") -> {
+                val name = c.replace("कॉल", "")
+                    .replace("call", "")
+                    .replace("करो", "")
+                    .replace("लगाओ", "")
+                    .trim()
+
+                if (name.isBlank()) speak("किसे कॉल करना है?")
+                else findContact(name)
             }
 
-            c.contains("instagram") || c.contains("इंस्टाग्राम") -> {
-                openApp("com.instagram.android", "Instagram खोल रहा हूँ।")
-            }
+            c.contains("whatsapp") || c.contains("व्हाट्सएप") ->
+                openApp("com.whatsapp")
 
-            c.contains("youtube") || c.contains("यूट्यूब") -> {
-                openApp("com.google.android.youtube", "YouTube खोल रहा हूँ।")
-            }
+            c.contains("instagram") || c.contains("इंस्टाग्राम") ->
+                openApp("com.instagram.android")
 
-            c.contains("maps") || c.contains("मैप") -> {
-                startActivity(Intent(
-                    Intent.ACTION_VIEW,
-                    android.net.Uri.parse("geo:0,0?q=")
-                ))
-                "Google Maps खोल रहा हूँ।"
-            }
+            c.contains("youtube") || c.contains("यूट्यूब") ->
+                openApp("com.google.android.youtube")
 
-            c.contains("alarm") || c.contains("अलार्म") -> {
-                startActivity(Intent(
-                    android.provider.AlarmClock.ACTION_SHOW_ALARMS
-                ))
-                "अलार्म खोल रहा हूँ।"
-            }
+            c.contains("समय") || c.contains("time") ->
+                speak("अभी समय " + java.text.SimpleDateFormat(
+                    "hh:mm a", Locale("hi", "IN")
+                ).format(java.util.Date()))
 
-            c.contains("समय") || c.contains("time") -> {
-                "अभी समय " +
-                    java.text.SimpleDateFormat(
-                        "hh:mm a", Locale("hi", "IN")
-                    ).format(java.util.Date())
-            }
-
-            else -> "मैंने सुना: $command"
+            else -> speak("मैंने सुना: $command")
         }
-
-        status.text = reply
-        tts.speak(
-            reply,
-            TextToSpeech.QUEUE_FLUSH,
-            null,
-            "tipu_reply"
-        )
     }
 
-    private fun openApp(packageName: String, reply: String): String {
-        val launch = packageManager.getLaunchIntentForPackage(packageName)
-
-        if (launch != null) {
-            startActivity(launch)
-            return reply
+    private fun findContact(name: String) {
+        if (checkSelfPermission(Manifest.permission.READ_CONTACTS)
+            != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), 20)
+            speak("कॉन्टैक्ट की अनुमति दें और फिर दोबारा बोलें।")
+            return
         }
 
-        return "यह ऐप फोन में इंस्टॉल नहीं है।"
+        var number: String? = null
+
+        contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            arrayOf(
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                ContactsContract.CommonDataKinds.Phone.NUMBER
+            ),
+            null, null, null
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                val contactName = cursor.getString(0) ?: ""
+                if (contactName.contains(name, ignoreCase = true)) {
+                    number = cursor.getString(1)
+                    break
+                }
+            }
+        }
+
+        if (number != null) {
+            speak("कॉन्टैक्ट मिल गया। डायलर खोल रहा हूँ।")
+            startActivity(Intent(Intent.ACTION_DIAL,
+                Uri.parse("tel:$number")))
+        } else {
+            speak("$name नाम का कॉन्टैक्ट नहीं मिला।")
+        }
+    }
+
+    private fun openApp(packageName: String) {
+        val launch = packageManager.getLaunchIntentForPackage(packageName)
+        if (launch != null) {
+            startActivity(launch)
+            speak("ऐप खोल रहा हूँ।")
+        } else {
+            speak("यह ऐप इंस्टॉल नहीं है।")
+        }
+    }
+
+    private fun speak(message: String) {
+        status.text = message
+        tts.speak(message, TextToSpeech.QUEUE_FLUSH, null, "tipu_reply")
     }
 
     override fun onDestroy() {
